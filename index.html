@@ -525,40 +525,37 @@
   const historyList   = document.getElementById('historyList');
   const noSupport     = document.getElementById('no-support');
 
-  // ── Init voces ──
-  populateVoices();
-  window.speechSynthesis.onvoiceschanged = populateVoices;
-
-  function populateVoices() {
+  // ── Cargar voces ──
+  function cargarVoces() {
     const list = window.speechSynthesis.getVoices();
+    if (list.length === 0) return;
     voices = list;
+
     const prev = voiceSelect.value;
     voiceSelect.innerHTML = '';
 
-    // Opción siempre disponible
-    const addOpt = (val, label) => {
+    // Español primero, luego el resto
+    const ordenadas = [
+      ...list.filter(v => v.lang.startsWith('es')),
+      ...list.filter(v => !v.lang.startsWith('es')),
+    ];
+
+    ordenadas.forEach(v => {
       const o = document.createElement('option');
-      o.value = val; o.text = label;
+      o.value = v.name;
+      o.text  = `${v.name} (${v.lang})`;
       voiceSelect.appendChild(o);
-    };
-
-    addOpt('__es-US__', '♂ Español (predeterminado del sistema)');
-
-    const esVoices = list.filter(v => v.lang.startsWith('es'));
-    const enVoices = list.filter(v => v.lang.startsWith('en'));
-    const rest     = list.filter(v => !v.lang.startsWith('es') && !v.lang.startsWith('en'));
-
-    [...esVoices, ...enVoices, ...rest].forEach(v => {
-      addOpt(v.name, `${v.name} (${v.lang})`);
     });
 
-    // Restaurar selección o elegir primera voz en español
+    // Mantener selección anterior o elegir primera voz
     if (prev && Array.from(voiceSelect.options).some(o => o.value === prev)) {
       voiceSelect.value = prev;
-    } else if (esVoices.length > 0) {
-      voiceSelect.value = esVoices[0].name;
     }
   }
+
+  // Cargar al inicio y cuando el navegador las tenga listas
+  cargarVoces();
+  window.speechSynthesis.onvoiceschanged = cargarVoces;
 
   renderHistory();
 
@@ -578,29 +575,28 @@
   generateBtn.addEventListener('click', () => {
     const text = textInput.value.trim();
     if (!text) { showToast('⚠️ Escribe algo primero'); return; }
-
     stopSpeech();
     playerCard.style.display = 'block';
-    saveToHistory(text, voiceSelect.value || 'default', rateSlider.value, pitchSlider.value);
+    saveToHistory(text, voiceSelect.value || '', rateSlider.value, pitchSlider.value);
     startSpeech(text);
-    showToast('🎙️ Generando voz...');
   });
 
-  // ── Speech (Web Speech API nativa) ──
+  // ── Speech ──
   function startSpeech(text) {
     window.speechSynthesis.cancel();
 
     const utt = new SpeechSynthesisUtterance(text);
     currentUtterance = utt;
 
-    const sel = voiceSelect.value;
-    if (sel && sel !== '__es-US__') {
-      const v = voices.find(v => v.name === sel);
-      if (v) utt.voice = v;
+    // Asignar voz seleccionada
+    const voiceObj = voices.find(v => v.name === voiceSelect.value);
+    if (voiceObj) {
+      utt.voice = voiceObj;
+      utt.lang  = voiceObj.lang;
+    } else {
+      utt.lang = 'es-ES';
     }
 
-    // Siempre setear lang — clave en Android para que elija voz correcta
-    utt.lang   = (utt.voice ? utt.voice.lang : null) || 'es-US';
     utt.rate   = parseFloat(rateSlider.value);
     utt.pitch  = parseFloat(pitchSlider.value);
     utt.volume = 1;
@@ -614,7 +610,6 @@
       updatePlayBtn();
       setStatus('playing', 'Reproduciendo...');
       startProgress();
-      // Keep-alive: Android Chrome pausa síntesis en textos largos
       keepAliveInterval = setInterval(() => {
         if (!window.speechSynthesis.speaking) { clearInterval(keepAliveInterval); return; }
         if (window.speechSynthesis.paused) window.speechSynthesis.resume();
@@ -638,7 +633,7 @@
       stopProgress();
       if (e.error === 'not-allowed') {
         setStatus('error', 'Bloqueado');
-        showToast('❌ Bloqueado por el navegador. Tocá la pantalla e intentá de nuevo.');
+        showToast('❌ Bloqueado. Tocá la pantalla e intentá de nuevo.');
       } else if (e.error !== 'interrupted' && e.error !== 'canceled') {
         setStatus('error', 'Error: ' + e.error);
         showToast('❌ Error: ' + e.error);
