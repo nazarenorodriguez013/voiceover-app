@@ -7,8 +7,7 @@
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <link rel="manifest" href="manifest.json" />
-  <script src="https://code.responsivevoice.org/responsivevoice.js?key=FREE"></script>
-  <title>VoiceOver App</title>
+<title>VoiceOver App</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -526,28 +525,40 @@
   const historyList   = document.getElementById('historyList');
   const noSupport     = document.getElementById('no-support');
 
-  // ── Voces disponibles (ResponsiveVoice) ──
-  const RV_VOICES = [
-    { value: 'Spanish Latin American Male',   label: '♂ Hombre - Español Latino' },
-    { value: 'Spanish Latin American Female', label: '♀ Mujer - Español Latino' },
-    { value: 'Spanish Male',                  label: '♂ Hombre - Español (España)' },
-    { value: 'Spanish Female',                label: '♀ Mujer - Español (España)' },
-    { value: 'US English Male',               label: '♂ Hombre - Inglés (EE.UU.)' },
-    { value: 'US English Female',             label: '♀ Mujer - Inglés (EE.UU.)' },
-    { value: 'Brazilian Portuguese Male',     label: '♂ Hombre - Portugués (Brasil)' },
-    { value: 'Brazilian Portuguese Female',   label: '♀ Mujer - Portugués (Brasil)' },
-  ];
+  // ── Init voces ──
+  populateVoices();
+  window.speechSynthesis.onvoiceschanged = populateVoices;
 
-  // Init
-  voiceSelect.innerHTML = '';
-  RV_VOICES.forEach(v => {
-    const opt = document.createElement('option');
-    opt.value = v.value;
-    opt.text  = v.label;
-    voiceSelect.appendChild(opt);
-  });
-  // Seleccionar voz masculina por defecto
-  voiceSelect.value = 'Spanish Latin American Male';
+  function populateVoices() {
+    const list = window.speechSynthesis.getVoices();
+    voices = list;
+    const prev = voiceSelect.value;
+    voiceSelect.innerHTML = '';
+
+    // Opción siempre disponible
+    const addOpt = (val, label) => {
+      const o = document.createElement('option');
+      o.value = val; o.text = label;
+      voiceSelect.appendChild(o);
+    };
+
+    addOpt('__es-US__', '♂ Español (predeterminado del sistema)');
+
+    const esVoices = list.filter(v => v.lang.startsWith('es'));
+    const enVoices = list.filter(v => v.lang.startsWith('en'));
+    const rest     = list.filter(v => !v.lang.startsWith('es') && !v.lang.startsWith('en'));
+
+    [...esVoices, ...enVoices, ...rest].forEach(v => {
+      addOpt(v.name, `${v.name} (${v.lang})`);
+    });
+
+    // Restaurar selección o elegir primera voz en español
+    if (prev && Array.from(voiceSelect.options).some(o => o.value === prev)) {
+      voiceSelect.value = prev;
+    } else if (esVoices.length > 0) {
+      voiceSelect.value = esVoices[0].name;
+    }
+  }
 
   renderHistory();
 
@@ -575,53 +586,71 @@
     showToast('🎙️ Generando voz...');
   });
 
-  // ── Speech (ResponsiveVoice) ──
+  // ── Speech (Web Speech API nativa) ──
   function startSpeech(text) {
-    if (typeof responsiveVoice === 'undefined') {
-      showToast('❌ Error cargando motor de voz. Revisá la conexión.');
-      return;
+    window.speechSynthesis.cancel();
+
+    const utt = new SpeechSynthesisUtterance(text);
+    currentUtterance = utt;
+
+    const sel = voiceSelect.value;
+    if (sel && sel !== '__es-US__') {
+      const v = voices.find(v => v.name === sel);
+      if (v) utt.voice = v;
     }
 
-    responsiveVoice.cancel();
-
-    const voice = voiceSelect.value || 'Spanish Latin American Male';
-    const rate  = parseFloat(rateSlider.value);
-    const pitch = parseFloat(pitchSlider.value);
+    // Siempre setear lang — clave en Android para que elija voz correcta
+    utt.lang   = (utt.voice ? utt.voice.lang : null) || 'es-US';
+    utt.rate   = parseFloat(rateSlider.value);
+    utt.pitch  = parseFloat(pitchSlider.value);
+    utt.volume = 1;
 
     const words = text.split(/\s+/).length;
-    estimatedDuration = (words / 150) * 60 * 1000 / rate;
+    estimatedDuration = (words / 150) * 60 * 1000 / utt.rate;
 
-    responsiveVoice.speak(text, voice, {
-      rate,
-      pitch,
-      volume: 1,
-      onstart: () => {
-        isPlaying = true;
-        speechStartTime = Date.now();
-        updatePlayBtn();
-        setStatus('playing', 'Reproduciendo...');
-        startProgress();
-      },
-      onend: () => {
-        isPlaying = false;
-        updatePlayBtn();
-        setStatus('ready', 'Listo');
-        progressFill.style.width = '100%';
-        stopProgress();
-        setTimeout(() => { progressFill.style.width = '0%'; }, 600);
-      },
-      onerror: () => {
-        isPlaying = false;
-        updatePlayBtn();
-        setStatus('error', 'Error al reproducir');
-        stopProgress();
-        showToast('❌ Error al reproducir. Revisá la conexión.');
+    utt.onstart = () => {
+      isPlaying = true;
+      speechStartTime = Date.now();
+      updatePlayBtn();
+      setStatus('playing', 'Reproduciendo...');
+      startProgress();
+      // Keep-alive: Android Chrome pausa síntesis en textos largos
+      keepAliveInterval = setInterval(() => {
+        if (!window.speechSynthesis.speaking) { clearInterval(keepAliveInterval); return; }
+        if (window.speechSynthesis.paused) window.speechSynthesis.resume();
+      }, 10000);
+    };
+
+    utt.onend = () => {
+      isPlaying = false;
+      clearInterval(keepAliveInterval);
+      updatePlayBtn();
+      setStatus('ready', 'Listo');
+      progressFill.style.width = '100%';
+      stopProgress();
+      setTimeout(() => { progressFill.style.width = '0%'; }, 600);
+    };
+
+    utt.onerror = (e) => {
+      isPlaying = false;
+      clearInterval(keepAliveInterval);
+      updatePlayBtn();
+      stopProgress();
+      if (e.error === 'not-allowed') {
+        setStatus('error', 'Bloqueado');
+        showToast('❌ Bloqueado por el navegador. Tocá la pantalla e intentá de nuevo.');
+      } else if (e.error !== 'interrupted' && e.error !== 'canceled') {
+        setStatus('error', 'Error: ' + e.error);
+        showToast('❌ Error: ' + e.error);
       }
-    });
+    };
+
+    window.speechSynthesis.speak(utt);
   }
 
   function stopSpeech() {
-    if (typeof responsiveVoice !== 'undefined') responsiveVoice.cancel();
+    window.speechSynthesis.cancel();
+    clearInterval(keepAliveInterval);
     isPlaying = false;
     currentUtterance = null;
     updatePlayBtn();
