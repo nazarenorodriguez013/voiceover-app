@@ -547,14 +547,22 @@
   // ── Voices ──
   function loadVoices() {
     const list = speechSynthesis.getVoices();
-    if (list.length === 0) return;
     voices = list;
+
     voiceSelect.innerHTML = '';
 
+    // Siempre hay una opción por defecto aunque no carguen voces
+    const defaultOpt = document.createElement('option');
+    defaultOpt.value = '';
+    defaultOpt.text = '🔊 Voz del sistema (predeterminada)';
+    voiceSelect.appendChild(defaultOpt);
+
+    if (list.length === 0) return;
+
     const sorted = [
-      ...voices.filter(v => v.lang.startsWith('es')),
-      ...voices.filter(v => v.lang.startsWith('en')),
-      ...voices.filter(v => !v.lang.startsWith('es') && !v.lang.startsWith('en')),
+      ...list.filter(v => v.lang.startsWith('es')),
+      ...list.filter(v => v.lang.startsWith('en')),
+      ...list.filter(v => !v.lang.startsWith('es') && !v.lang.startsWith('en')),
     ];
 
     sorted.forEach(v => {
