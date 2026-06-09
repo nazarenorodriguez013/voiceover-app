@@ -581,72 +581,132 @@
     startSpeech(text);
   });
 
+  // ── Preprocesar texto para lectura natural ──
+  function prepararFragmentos(texto) {
+    // Normalizar espacios y saltos de línea
+    texto = texto.replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim();
+
+    // Dividir en párrafos primero
+    const parrafos = texto.split(/\n{2,}/);
+    const fragmentos = [];
+
+    parrafos.forEach((parrafo, pi) => {
+      // Dentro de cada párrafo dividir por . ! ? ; seguidos de espacio/fin
+      const oraciones = parrafo
+        .split(/(?<=[.!?;])\s+/)
+        .map(s => s.trim())
+        .filter(s => s.length > 0);
+
+      oraciones.forEach((oracion, oi) => {
+        // Subdividir por comas largas (más de 3 palabras entre comas)
+        const partes = oracion.split(/,\s*/).reduce((acc, parte, idx, arr) => {
+          if (idx === 0) { acc.push(parte); return acc; }
+          const ultimo = acc[acc.length - 1];
+          const palabras = parte.split(/\s+/).length;
+          // Unir partes cortas con la anterior, separar las largas con pausa
+          if (palabras <= 2) {
+            acc[acc.length - 1] = ultimo + ', ' + parte;
+          } else {
+            acc[acc.length - 1] = ultimo + ',';
+            acc.push(parte);
+          }
+          return acc;
+        }, []);
+
+        partes.forEach((parte, ki) => {
+          const esFin = ki === partes.length - 1;
+          // Pausa después de punto = 500ms, coma = 200ms, entre párrafos = 700ms
+          const pausa = pi < parrafos.length - 1 && oi === oraciones.length - 1 && esFin
+            ? 700
+            : esFin ? 500 : 200;
+          fragmentos.push({ texto: parte, pausa });
+        });
+      });
+    });
+
+    return fragmentos;
+  }
+
   // ── Speech ──
+  let fragmentosCola = [];
+  let fragmentoIdx   = 0;
+  let totalFragmentos = 0;
+
   function startSpeech(text) {
     window.speechSynthesis.cancel();
+    clearTimeout(keepAliveInterval);
 
-    const utt = new SpeechSynthesisUtterance(text);
+    fragmentosCola  = prepararFragmentos(text);
+    fragmentoIdx    = 0;
+    totalFragmentos = fragmentosCola.length;
+
+    if (totalFragmentos === 0) return;
+
+    isPlaying = true;
+    speechStartTime = Date.now();
+    const words = text.split(/\s+/).length;
+    estimatedDuration = (words / 150) * 60 * 1000 / parseFloat(rateSlider.value);
+
+    updatePlayBtn();
+    setStatus('playing', 'Reproduciendo...');
+    startProgress();
+
+    hablarFragmento();
+  }
+
+  function hablarFragmento() {
+    if (fragmentoIdx >= totalFragmentos || !isPlaying) {
+      if (isPlaying) finSpeech();
+      return;
+    }
+
+    const { texto, pausa } = fragmentosCola[fragmentoIdx];
+    const utt = new SpeechSynthesisUtterance(texto);
     currentUtterance = utt;
 
-    // Asignar voz seleccionada
     const voiceObj = voices.find(v => v.name === voiceSelect.value);
-    if (voiceObj) {
-      utt.voice = voiceObj;
-      utt.lang  = voiceObj.lang;
-    } else {
-      utt.lang = 'es-ES';
-    }
+    if (voiceObj) { utt.voice = voiceObj; utt.lang = voiceObj.lang; }
+    else          { utt.lang = 'es-ES'; }
 
     utt.rate   = parseFloat(rateSlider.value);
     utt.pitch  = parseFloat(pitchSlider.value);
     utt.volume = 1;
 
-    const words = text.split(/\s+/).length;
-    estimatedDuration = (words / 150) * 60 * 1000 / utt.rate;
-
-    utt.onstart = () => {
-      isPlaying = true;
-      speechStartTime = Date.now();
-      updatePlayBtn();
-      setStatus('playing', 'Reproduciendo...');
-      startProgress();
-      keepAliveInterval = setInterval(() => {
-        if (!window.speechSynthesis.speaking) { clearInterval(keepAliveInterval); return; }
-        if (window.speechSynthesis.paused) window.speechSynthesis.resume();
-      }, 10000);
-    };
-
     utt.onend = () => {
-      isPlaying = false;
-      clearInterval(keepAliveInterval);
-      updatePlayBtn();
-      setStatus('ready', 'Listo');
-      progressFill.style.width = '100%';
-      stopProgress();
-      setTimeout(() => { progressFill.style.width = '0%'; }, 600);
+      fragmentoIdx++;
+      // Pausa entre fragmentos para que suene natural
+      keepAliveInterval = setTimeout(hablarFragmento, pausa / utt.rate);
     };
 
     utt.onerror = (e) => {
-      isPlaying = false;
-      clearInterval(keepAliveInterval);
-      updatePlayBtn();
-      stopProgress();
+      if (e.error === 'interrupted' || e.error === 'canceled') return;
       if (e.error === 'not-allowed') {
-        setStatus('error', 'Bloqueado');
+        stopSpeech();
         showToast('❌ Bloqueado. Tocá la pantalla e intentá de nuevo.');
-      } else if (e.error !== 'interrupted' && e.error !== 'canceled') {
-        setStatus('error', 'Error: ' + e.error);
-        showToast('❌ Error: ' + e.error);
+        return;
       }
+      // En error, intentar con el siguiente fragmento
+      fragmentoIdx++;
+      setTimeout(hablarFragmento, 100);
     };
 
     window.speechSynthesis.speak(utt);
   }
 
+  function finSpeech() {
+    isPlaying = false;
+    updatePlayBtn();
+    setStatus('ready', 'Listo');
+    progressFill.style.width = '100%';
+    stopProgress();
+    setTimeout(() => { progressFill.style.width = '0%'; }, 600);
+  }
+
   function stopSpeech() {
     window.speechSynthesis.cancel();
-    clearInterval(keepAliveInterval);
+    clearTimeout(keepAliveInterval);
     isPlaying = false;
+    fragmentoIdx = totalFragmentos; // evitar que siga
     currentUtterance = null;
     updatePlayBtn();
     setStatus('ready', 'Listo');
