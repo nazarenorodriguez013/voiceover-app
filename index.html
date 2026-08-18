@@ -7,6 +7,8 @@
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <link rel="manifest" href="manifest.json" />
+  <link rel="icon" href="icon-192.png" type="image/png" />
+  <link rel="apple-touch-icon" href="icon-192.png" />
 <title>VoiceOver App</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -429,11 +431,6 @@
       ⚠️ Tu navegador no soporta síntesis de voz. Usá Chrome o Safari.
     </div>
 
-    <div id="debugPanel" style="display:none;background:#1a1a2e;border:1px solid #444;border-radius:10px;padding:12px;font-size:0.75rem;color:#aaa;line-height:1.6">
-      <b style="color:#fff">Info de diagnóstico:</b><br>
-      <span id="debugText"></span>
-    </div>
-
     <div>
       <label class="field-label">Voz</label>
       <div class="select-wrapper">
@@ -474,7 +471,7 @@
       <div class="player-controls">
         <button class="btn btn-icon" id="playPauseBtn" title="Reproducir / Pausar">▶</button>
         <button class="btn btn-icon" id="stopBtn" title="Detener">⏹</button>
-        <button class="btn btn-sm" id="downloadBtn">⬇ Descargar MP3</button>
+        <button class="btn btn-sm" id="downloadBtn">⬇ Descargar audio</button>
       </div>
       <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
     </div>
@@ -526,6 +523,8 @@
   const noSupport     = document.getElementById('no-support');
 
   // ── Cargar voces ──
+  const speechSupported = 'speechSynthesis' in window && typeof SpeechSynthesisUtterance !== 'undefined';
+
   function cargarVoces() {
     const list = window.speechSynthesis.getVoices();
     if (list.length === 0) return;
@@ -553,9 +552,16 @@
     }
   }
 
-  // Cargar al inicio y cuando el navegador las tenga listas
-  cargarVoces();
-  window.speechSynthesis.onvoiceschanged = cargarVoces;
+  if (speechSupported) {
+    // Cargar al inicio y cuando el navegador las tenga listas
+    cargarVoces();
+    window.speechSynthesis.onvoiceschanged = cargarVoces;
+  } else {
+    noSupport.style.display = 'block';
+    generateBtn.disabled = true;
+    generateBtn.style.opacity = '0.5';
+    generateBtn.style.cursor = 'not-allowed';
+  }
 
   renderHistory();
 
@@ -603,7 +609,7 @@
         const esInterrogacion = oracion.endsWith('?') || oracion.includes('¿');
         const esExclamacion   = oracion.endsWith('!') || oracion.includes('¡');
         const esCortaIntensa  = oracion.split(/\s+/).length <= 4 && esExclamacion;
-        const tieneMAYUS      = /[A-ZÁÉÍÓÚÑ]{3,}/.test(oracion); // palabras en caps
+        const tieneMAYUS      = /[A-ZÁÉÍÓÚÑ]{3,}/.test(oracion);
 
         // Variación de pitch: oscila suavemente entre oraciones (+/-0.08)
         const variacion = (oracionIdx % 4 === 0) ?  0.07
@@ -656,6 +662,7 @@
   let totalFragmentos = 0;
 
   function startSpeech(text) {
+    if (!speechSupported) { showToast('⚠️ Tu navegador no soporta síntesis de voz'); return; }
     window.speechSynthesis.cancel();
     clearTimeout(keepAliveInterval);
 
@@ -730,6 +737,7 @@
   }
 
   function stopSpeech() {
+    if (!speechSupported) return;
     window.speechSynthesis.cancel();
     clearTimeout(keepAliveInterval);
     isPlaying = false;
@@ -796,17 +804,15 @@
     try {
       await recordAndDownload(text);
     } catch(e) {
-      // Fallback: download as text file with instructions
       showToast('⚠️ Tu navegador no soporta grabación directa');
       fallbackDownload(text);
     } finally {
       downloadBtn.disabled = false;
-      downloadBtn.textContent = '⬇ Descargar MP3';
+      downloadBtn.textContent = '⬇ Descargar audio';
     }
   });
 
   async function recordAndDownload(text) {
-    // Use AudioContext + MediaStreamDestination to capture TTS
     const ctx = new (window.AudioContext || window.webkitAudioContext)();
     const dest = ctx.createMediaStreamDestination();
     const mediaRecorder = new MediaRecorder(dest.stream, {
@@ -817,9 +823,10 @@
     mediaRecorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
 
     return new Promise((resolve, reject) => {
-      // Note: Web Speech API doesn't route through AudioContext on all browsers.
-      // We use a loopback approach: capture system audio via getUserMedia if possible,
-      // otherwise we fallback to a "silent" record + blob trick.
+      // Nota: el audio de SpeechSynthesisUtterance no se puede conectar a un
+      // AudioNode/MediaStreamDestination en la mayoría de los navegadores, así
+      // que esta grabación puede salir muda en algunos casos. Si el blob queda
+      // vacío se usa el fallback de texto (ver catch en el listener del botón).
       mediaRecorder.start(100);
 
       const utt = new SpeechSynthesisUtterance(text);
@@ -855,7 +862,6 @@
   }
 
   function fallbackDownload(text) {
-    // Fallback: download as .txt with instructions
     const blob = new Blob([text], { type: 'text/plain' });
     triggerDownload(blob, `texto_voiceover_${Date.now()}.txt`);
     showToast('📄 Texto descargado (tu navegador no soporta grabación de audio)');
@@ -888,7 +894,6 @@
       pitch: parseFloat(pitch),
       date: new Date().toLocaleString('es-AR'),
     });
-    // Keep max 50
     if (history.length > 50) history.pop();
     localStorage.setItem(HISTORY_KEY, JSON.stringify(history));
     renderHistory();
@@ -927,7 +932,6 @@
     if (!item) return;
     stopSpeech();
 
-    // Set voice
     const voiceOpt = Array.from(voiceSelect.options).find(o => o.value === item.voice);
     if (voiceOpt) voiceSelect.value = item.voice;
     rateSlider.value = item.rate;
@@ -935,7 +939,6 @@
     rateVal.textContent = item.rate.toFixed(1) + 'x';
     pitchVal.textContent = item.pitch.toFixed(1);
 
-    // Switch tab
     switchTab('generate');
     textInput.value = item.text;
     charCount.textContent = item.text.length;
@@ -1001,13 +1004,6 @@
   // ──────────────────────────────────────────────
   function escapeHtml(str) {
     return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-  }
-
-  function showDebug(msg) {
-    const panel = document.getElementById('debugPanel');
-    const text  = document.getElementById('debugText');
-    panel.style.display = 'block';
-    text.innerHTML = msg;
   }
 </script>
 </body>
